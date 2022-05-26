@@ -19,6 +19,7 @@ import (
 	"github.com/messagebird/sachet/provider/mailruim"
 	"github.com/messagebird/sachet/provider/mediaburst"
 	"github.com/messagebird/sachet/provider/messagebird"
+	"github.com/messagebird/sachet/provider/modem"
 	"github.com/messagebird/sachet/provider/nexmo"
 	"github.com/messagebird/sachet/provider/nowsms"
 	"github.com/messagebird/sachet/provider/otc"
@@ -75,6 +76,7 @@ var config struct {
 		Ghasedak     ghasedak.Config
 		Sfr          sfr.Config
 		TextMagic    textmagic.Config
+		Modem        modem.Config
 	}
 
 	Receivers []ReceiverConf

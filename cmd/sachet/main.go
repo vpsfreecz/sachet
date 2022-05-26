@@ -27,6 +27,7 @@ import (
 	"github.com/messagebird/sachet/provider/mailruim"
 	"github.com/messagebird/sachet/provider/mediaburst"
 	"github.com/messagebird/sachet/provider/messagebird"
+	"github.com/messagebird/sachet/provider/modem"
 	"github.com/messagebird/sachet/provider/nexmo"
 	"github.com/messagebird/sachet/provider/nowsms"
 	"github.com/messagebird/sachet/provider/otc"
@@ -55,6 +56,12 @@ func main() {
 
 	if err := LoadConfig(*configFile); err != nil {
 		log.Fatalf("Error loading configuration: %s", err)
+	}
+
+	if config.Providers.Modem.Device != "" {
+		if err := modem.SetupModem(config.Providers.Modem); err != nil {
+			log.Fatalf("Error setting up modem: %s", err)
+		}
 	}
 
 	app := handlers{}
@@ -147,6 +154,8 @@ func providerByName(name string) (sachet.Provider, error) {
 		return sfr.NewSfr(config.Providers.Sfr), nil
 	case "textmagic":
 		return textmagic.NewTextMagic(config.Providers.TextMagic), nil
+	case "modem":
+		return modem.NewModem(config.Providers.Modem), nil
 	}
 
 	return nil, fmt.Errorf("%s: Unknown provider", name)
