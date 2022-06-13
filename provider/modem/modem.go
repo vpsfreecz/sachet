@@ -1,8 +1,8 @@
 package modem
 
 import (
-	"log"
 	"io"
+	"log"
 	"time"
 
 	"github.com/messagebird/sachet"
@@ -13,30 +13,55 @@ import (
 )
 
 type Config struct {
-	Device string `yaml:device`
-	Mode string `yaml:mode`
-	BaudRate int `yaml:baud_rate`
-	Timeout time.Duration `yaml:timeout`
-	Verbose bool `yaml:verbose`
-	Hex bool `yaml:hex`
-	Attempts int `yaml:attempts`
-	Cooldown float32 `yaml:cooldown`
+	Device    string        `yaml:device`
+	Mode      string        `yaml:mode`
+	BaudRate  int           `yaml:baud_rate`
+	Timeout   time.Duration `yaml:timeout`
+	Verbose   bool          `yaml:verbose`
+	Hex       bool          `yaml:hex`
+	QueueSize int           `yaml:queue_size`
+	Attempts  int           `yaml:attempts`
+	Cooldown  float32       `yaml:cooldown`
 }
 
 var _ (sachet.Provider) = (*Modem)(nil)
 
 type Modem struct {
-	Gsm *gsm.GSM
-	Pdu bool
-	Attempts int
-	Cooldown float32
-	channel chan sachet.Message
+	Gsm       *gsm.GSM
+	Pdu       bool
+	Attempts  int
+	Cooldown  float32
+	inQueue   chan queueCommand
+	outQueue  chan queueResponse
+	queueSize int
+}
+
+const (
+	put uint = iota
+	fetch
+	check
+)
+
+type queueCommand struct {
+	command uint
+	message sachet.Message
+}
+
+type queueResponse struct {
+	status  bool
+	message sachet.Message
 }
 
 var modemInstance *Modem = nil
 
 func SetupModem(config Config) error {
-	modem := Modem{Attempts: 5, Cooldown: 1, channel: make(chan sachet.Message, 32)}
+	modem := Modem{
+		Attempts:  5,
+		Cooldown:  1,
+		queueSize: 5,
+		inQueue:   make(chan queueCommand, 1),
+		outQueue:  make(chan queueResponse, 1),
+	}
 	mode := "pdu"
 	baudRate := 115200
 	timeout := 5 * time.Second
@@ -54,9 +79,13 @@ func SetupModem(config Config) error {
 	if config.BaudRate != 0 {
 		baudRate = config.BaudRate
 	}
-	
+
 	if config.Timeout != 0 {
 		timeout = config.Timeout * time.Second
+	}
+
+	if config.QueueSize != 0 {
+		modem.queueSize = config.QueueSize
 	}
 
 	if config.Attempts != 0 {
@@ -100,6 +129,7 @@ func SetupModem(config Config) error {
 	}
 
 	modem.Gsm = g
+	go modem.runFilter()
 	go modem.runDispatcher()
 	modemInstance = &modem
 	return nil
@@ -110,19 +140,49 @@ func NewModem(config Config) *Modem {
 }
 
 func (m *Modem) Send(message sachet.Message) error {
-	go m.sendInBackground(message)
+	m.inQueue <- queueCommand{command: put, message: message}
 	return nil
+}
+
+func (m *Modem) runFilter() {
+	queue := make([]sachet.Message, 0)
+	waiting := false
+
+	for {
+		cmd := <-m.inQueue
+
+		if cmd.command == fetch {
+			if len(queue) == 0 {
+				waiting = true
+				continue
+			}
+
+			m.outQueue <- queueResponse{status: true, message: queue[0]}
+			queue = queue[1:]
+		} else if cmd.command == check {
+			m.outQueue <- queueResponse{status: len(queue) > 0}
+		} else if cmd.command == put {
+			if waiting {
+				m.outQueue <- queueResponse{status: true, message: cmd.message}
+				waiting = false
+			} else {
+				queue = append(queue, cmd.message)
+
+				if len(queue) > m.queueSize {
+					log.Printf("modem: dropping message from send queue")
+					queue = queue[1:]
+				}
+			}
+		}
+	}
 }
 
 func (m *Modem) runDispatcher() {
 	for {
-		message := <-m.channel
-		m.sendSmses(message)
+		m.inQueue <- queueCommand{command: fetch}
+		cmd := <-m.outQueue
+		m.sendSmses(cmd.message)
 	}
-}
-
-func (m *Modem) sendInBackground(message sachet.Message) {
-	m.channel <- message
 }
 
 func (m *Modem) sendSmses(message sachet.Message) {
@@ -155,6 +215,15 @@ func (m *Modem) sendSmses(message sachet.Message) {
 		}
 
 		time.Sleep(time.Duration(m.Cooldown) * time.Second)
+
+		// If there is another queued message, give it precedence over
+		// further attempts to send the current message, as we're falling
+		// behind.
+		m.inQueue <- queueCommand{command: check}
+		if resp := <-m.outQueue; resp.status {
+			log.Printf("Skipping further attempts, continue with another message")
+			return
+		}
 	}
 
 }
