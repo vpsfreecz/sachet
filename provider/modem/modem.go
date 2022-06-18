@@ -200,6 +200,7 @@ func (m *Modem) sendSmses(message sachet.Message) {
 			if err == nil {
 				log.Printf("Sent SMS to %s (attempt %d/%d)", number, i, m.Attempts)
 				delete(smses, number)
+				time.Sleep(time.Duration(m.Cooldown) * time.Second)
 				continue
 			}
 
@@ -208,13 +209,13 @@ func (m *Modem) sendSmses(message sachet.Message) {
 			} else {
 				log.Printf("Failed to send SMS to %s: %w (attempt %d/%d)", number, err, i, m.Attempts)
 			}
+
+			time.Sleep(time.Duration(m.Cooldown) * time.Second)
 		}
 
 		if len(smses) == 0 {
 			return
 		}
-
-		time.Sleep(time.Duration(m.Cooldown) * time.Second)
 
 		// If there is another queued message, give it precedence over
 		// further attempts to send the current message, as we're falling
